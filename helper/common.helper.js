@@ -1,3 +1,5 @@
+const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
 const { check, validationResult } = require("express-validator");
 
 exports.give_response = (res, status_code, success, message, data = null) => {
@@ -27,4 +29,59 @@ exports.asyncHandler = (fn) => (req, res, next) => {
     } else {
         Promise.resolve(fn(req, res, next)).catch(next);
     }
+};
+
+exports.isAuthorized = function (req, res, next) {
+    if (typeof req.headers.authorization != "undefined") {
+        let token = req.headers.authorization.split(" ")[1];
+        jwt.verify(token, process.env.JWTSECRET, { algorithm: "HS256" }, (err, user) => {
+            if (err) {
+                console.log(err);
+                res.status(403).json({ success: false, message: "Not Authorized or invalid token.", data: [] });
+            } else {
+                req.user = user;
+                return next();
+            }
+        });
+    } else {
+        res.status(403).json({ success: false, message: "please pass token.", data: [] });
+    }
+};
+
+exports.check_role = function (...roles) {
+    return (req, res, next) => {
+        if (!roles.includes(req.user.role)) {
+            return give_response(res, 201, false, `nice try`);
+        }
+        next();
+    };
+};
+
+exports.makeid = (l) => {
+    let length = l ?? 6;
+    let result = "";
+    let characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let charactersLength = characters.length;
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    return result;
+};
+
+
+let all_transporter = nodemailer.createTransport({
+    host: process.env.MAIL_SERVICE,
+    port: 587,
+    auth: {
+        user: process.env.MAIL_USER,
+        pass: process.env.MAIL_PASS,
+    },
+    maxConnections: 3,
+    pool: true,
+});
+
+exports.addMinutes = function (minutes) {
+    let date = new Date();
+    date.setMinutes(date.getMinutes() + minutes);
+    return date.toISOString().replace(/T/, " ").replace(/\..+/, "");
 };

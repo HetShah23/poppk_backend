@@ -4,15 +4,12 @@ const express = require("express");
 const http = require("http");
 const cookieParser = require("cookie-parser");
 const bodyParser = require("body-parser");
-const fileUpload = require("express-fileupload");
 // const logger = require("morgan");
 const cors = require("cors");
 const compression = require("compression");
 
 const app = express();
 
-// file upload logic
-app.use(fileUpload());
 app.use(cors());
 // app.use(logger("dev"));
 
@@ -29,13 +26,15 @@ app.use(compression());
 
 // import all the routes in this file
 const mainRouter = require("./routes/main.route");
+const usersRouter = require("./routes/users.route");
 
 // all the routes
 app.use("/", mainRouter);
+app.use("/users", usersRouter);
 
 // listen on port 3001
 const server = http.createServer(app);
-server.listen(3001);
+server.listen(3002);
 
 // middleware error handler
 const errorHandler = require("./helper/error");
