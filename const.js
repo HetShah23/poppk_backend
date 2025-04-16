@@ -1,0 +1,1 @@
+exports.FRONTEND_URL = process.env.LIVE === 1 ? process.env.FRONTENDURL_LIVE :  process.env.FRONTENDURL_LOCAL

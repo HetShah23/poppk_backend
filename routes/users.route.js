@@ -7,12 +7,13 @@ const jwt = require("jsonwebtoken");
 const { check, validationResult } = require("express-validator");
 
 const errorResponse = require("../helper/error.helper");
-const { asyncHandler, isAuthorized, makeid } = require("../helper/common.helper");
+const { asyncHandler, isAuthorized, makeid, decrypt_text, give_response } = require("../helper/common.helper");
 
 const conn = require("../database/connection.db");
 const query = util.promisify(conn.query).bind(conn);
 
 const multer = require("multer");
+const { setupEmailTemplateForVerification, send_email } = require("../helper/email.helper");
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, "public/images/");
@@ -35,28 +36,77 @@ router.get("/", (req, res) => {
 
 
 // Register New User
-// 0 - role not defined 1 - free users 2 - paid users 3 - founders 4 - admin
+// 	0 - free user, 1 - normal user, 2 - founder user, 3 - admin
 router.post(
     "/new-user",
     [
         check("first_name").exists(), 
         check("last_name").exists(), 
         check("email").exists(), 
-        check("phone").exists(), 
-        check("password").exists(),
-        check("role").exists()
+        check("phone").exists()
     ],
-    asyncHandler(async (req, res) => {
-        if (req.body.password) req.body.password = bcrypt.hashSync(req.body.password, 10);
-        await query(`INSERT INTO users SET ? `, req.body);
+    asyncHandler( async (req, res) => {
 
-        
+        req.body.name = req.body.first_name + " " +  req.body.last_name;
+        delete req.body.first_name;
+        delete req.body.last_name;
+
+        const data = await query(`INSERT INTO pp_users_master SET ? `, req.body);
+
+        const { html, token } = await setupEmailTemplateForVerification(data.insertId, 1440);
+        const email_status = await send_email(req.body.email, html);
+        if (email_status.failed) throw new errorResponse(response.err);
 
         res.status(200).json({
             success: true,
-            message: "Verification link sent to your mail",
-            data: {},
+            message: "New user registered. Verification email sent",
+            data: {token},
         });
+    })
+);
+
+router.post(
+    "/verify-user",
+    [
+        check("token").exists(), 
+        check("password").exists()
+    ],
+    asyncHandler( async (req, res) => {
+        const plainText = decrypt_text(req.body.token);
+        let data = plainText.split("/");
+        
+        if (typeof data[0] === "undefined" || typeof data[1] === "undefined") throw new errorResponse("Invalid token!");
+        
+        let d1 = new Date();
+        let d2 = new Date(data[1] + "+00");
+
+        if (d1.getTime() > d2.getTime()) {
+            give_response(res, 410, false, "your magic link has expired, generate new one");
+        } else {
+            if (req.body.password) req.body.password = bcrypt.hashSync(req.body.password, 10);
+            let status = 1
+            let ref_code = "POP"+data[0];
+            await query(`UPDATE pp_users_master SET status=?,password=?,ref_code=? WHERE id = ?`, [status, req.body.password,ref_code, data[0]]);
+            
+            let result = await query(`SELECT * FROM pp_users_master WHERE id=? LIMIT 1;`, [data[0]]);
+            let token = jwt.sign(
+                {
+                    name: result[0].name,
+                    id: result[0].id,
+                    type: result[0].type,
+                    email: result[0].email,
+                },
+                process.env.JWTSECRET,
+                { expiresIn: "24h" },
+                { algorithm: "HS256" }
+            );
+
+            res.status(200).json({
+                success: true,
+                message: "New user registered. Verification email sent",
+                data: {token},
+            });
+        }
     })
 );
 
@@ -65,24 +115,99 @@ router.post(
     [
         check("email").exists(),
         check("password").exists(),
-        check("role").exists()
+        check("type").exists()
     ],
     asyncHandler(async (req, res) => {
-        let { email, role, password } = req.body;
-        let result = await query(`SELECT * FROM users WHERE email = ? && role = ? LIMIT 1;`, [email, role]);
+        let { email, password, type } = req.body;
         
+        let selecter_type = "ref_code";
+        if(email.includes("@")) selecter_type = "email"
+
+        if(type > 2) {
+            give_response(res, 403, false, "Unautho user type");
+            throw new errorResponse("Unautho");
+        }
+
+        let result = await query(`SELECT * FROM pp_users_master WHERE ${selecter_type} = ? && type IN (0,1) LIMIT 1;`, [email]);
+        
+        if(result.length === 0) {
+            give_response(res, 410, false, "User Not Found");
+            throw new errorResponse("User Not Found");
+        }
+
+        if(result[0].password === null || result[0].password === "" || result[0].password === undefined) {
+            const { html, token } = await setupEmailTemplateForVerification(result[0].id, 1440);
+            const email_status = await send_email(email, html);
+            if (email_status.failed) throw new errorResponse(response.err);
+
+            res.status(401).json({
+                success: false,
+                message: "Verification is pending email sent",
+                data: {
+                    token
+                },
+            });
+        } else {
+            let result2 = await bcrypt.compare(password, result[0].password);
+            if (!result2) throw new errorResponse("Unauthorized Login!!!");
+    
+            const token_exp = req.body.rm === true ? "7d" : "24h";
+
+            let token = jwt.sign(
+                {
+                    name: result[0].name,
+                    id: result[0].id,
+                    type: result[0].type,
+                    email: result[0].email,
+                },
+                process.env.JWTSECRET,
+                { expiresIn: token_exp },
+                { algorithm: "HS256" }
+            );
+            
+            res.status(200).json({
+                success: true,
+                message: "User Login",
+                data: {
+                    token
+                },
+            });
+        }
+
+    })
+);
+
+router.post(
+    "/admin-login",
+    [
+        check("email").exists(),
+        check("password").exists()
+    ],
+    asyncHandler(async (req, res) => {
+        let { email, password } = req.body;
+        if(email.includes("@")) query_setup = "SELECT * FROM pp_users_master WHERE email = ? LIMIT 1;"
+
+        let result = await query("SELECT * FROM pp_users_master WHERE email = ? && type = 3 LIMIT 1;", [email]);
+        
+        if(result.length === 0) {
+            give_response(res, 410, false, "User Not Found");
+            throw new errorResponse("User Not Found");
+        }
+
         let result2 = await bcrypt.compare(password, result[0].password);
         if (!result2) throw new errorResponse("Unauthorized Login!!!");
 
+        const token_exp = req.body.rm === true ? "7d" : "24h";
+
         let token = jwt.sign(
             {
-                name: result[0].first_name + result[0].last_name,
+                name: result[0].name,
                 id: result[0].id,
-                role: result[0].role,
+                type: result[0].type,
                 email: result[0].email,
             },
             process.env.JWTSECRET,
-            { expiresIn: "24h" },
+            { expiresIn: token_exp },
             { algorithm: "HS256" }
         );
         
@@ -93,6 +218,7 @@ router.post(
                 token
             },
         });
+
     })
 );
 
