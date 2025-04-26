@@ -51,11 +51,17 @@ router.post(
         delete req.body.first_name;
         delete req.body.last_name;
 
+        const emailCheck = await query(`SELECT * FROM pp_users_master WHERE req.body.email=${req.body.email};`);
+        if(emailCheck.length > 0) throw new errorResponse(response.err);
+
         const data = await query(`INSERT INTO pp_users_master SET ? `, req.body);
 
         const { html, token } = await setupEmailTemplateForVerification(data.insertId, 1440);
         const email_status = await send_email(req.body.email, html);
-        if (email_status.failed) throw new errorResponse(response.err);
+        if (email_status.failed) {
+            give_response(res, 410, false, "Email is already registered");
+            throw new errorResponse("Email is already registered");
+        }
 
         res.status(200).json({
             success: true,
@@ -307,6 +313,44 @@ router.post(
 );
 
 router.post(
+    "/get-advs-by-id",
+    asyncHandler(async (req, res) => {
+
+        const adv = await query(`SELECT * FROM pp_advs WHERE pp_advs._id = ${req.body.adv_id};`);
+
+        if(adv[0].location_id !== null && adv[0].location_id !== undefined && adv[0].location_id > 0) {
+            const location = await query(`SELECT * FROM pp_locations WHERE id = ${adv[0].pp_locations} LIMIT 0,1;`);
+            adv[0].city_name = location[0].City ?? "";
+            adv[0].local_name = location[0].PostOfficeName ?? "";
+        } else{
+            if(adv[0].location !== null && adv[0].location !== undefined && adv[0].location > 0){
+                const city = await query(`SELECT pp_cities.name as city_name, pp_locals.name as local_name FROM pp_locals JOIN pp_cities on pp_locals.city_id = pp_cities.id WHERE pp_locals.id = ${adv[0].location} LIMIT 0,1;`);
+                adv[0].city_name = city[0].city_name ?? "";
+                adv[0].local_name = city[0].local_name ?? "";
+            } else {
+                const city = await query(`SELECT pp_cities.name as city_name, pp_locals.name as local_name FROM pp_locals JOIN pp_cities on pp_locals.city_id = pp_cities.id WHERE pp_locals.id = ${adv[0].locals} LIMIT 0,1;`);
+                adv[0].city_name = city[0].city_name ?? "";
+                adv[0].local_name = city[0].local_name ?? "";
+            }
+        }
+
+        if(adv.length > 0) {
+            res.status(200).json({
+                success: true,
+                message: "Adv fetched successfully",
+                data: {adv},
+            });
+        } else{
+            res.status(404).json({
+                success: false,
+                message: "Adv not found",
+                data: {},
+            });
+        }
+    })
+);
+
+router.post(
     "/get-adv-by-user",
     isAuthorized,
     asyncHandler(async (req, res) => {
@@ -378,6 +422,24 @@ router.post(
     })
 );
 
+router.post(
+    "/get-users",
+    // isAuthorized,
+    asyncHandler(async (req, res) => {
+        const { page, sizePerPage, sortBy, order } = req.body;
+        const start = page * sizePerPage - sizePerPage;
+        const length = sizePerPage;
 
+        const sqlQuery = `SELECT id, name, ref_code, type, phone, balance, email FROM pp_users_master WHERE type IN (0,1,2) ORDER BY created_at DESC LIMIT ${start},${length};`;
+
+        const advs = await query(sqlQuery);
+
+        res.status(200).json({
+            success: true,
+            message: "Adv uploaded successfully",
+            data: {advs},
+        });
+    })
+);
 
 module.exports = router;
