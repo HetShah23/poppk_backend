@@ -51,16 +51,20 @@ router.post(
         delete req.body.first_name;
         delete req.body.last_name;
 
-        const emailCheck = await query(`SELECT * FROM pp_users_master WHERE req.body.email=${req.body.email};`);
-        if(emailCheck.length > 0) throw new errorResponse(response.err);
+        const emailCheck = await query(`SELECT * FROM pp_users_master WHERE email="${req.body.email}";`);
+        if(emailCheck.length > 0) {
+            give_response(res, 410, false, "Email is already registered");
+            throw new errorResponse("Email is already registered");
+        }
 
         const data = await query(`INSERT INTO pp_users_master SET ? `, req.body);
 
         const { html, token } = await setupEmailTemplateForVerification(data.insertId, 1440);
         const email_status = await send_email(req.body.email, html);
         if (email_status.failed) {
-            give_response(res, 410, false, "Email is already registered");
-            throw new errorResponse("Email is already registered");
+            give_response(res, 502 , false, `EMAIL NOT SENT TO ${req.body.email}`);
+        } else {
+            console.log(`EMAIL SUCCESSFULLY SENT TO ${req.body.email}`);
         }
 
         res.status(200).json({
@@ -300,7 +304,7 @@ router.post(
         const start = page * sizePerPage - sizePerPage;
         const length = sizePerPage;
 
-        const sqlQuery = `SELECT pp_advs.name, pp_advs.details, pp_advs._id, pp_advs.slug, pp_advs.url, pp_advs.image_path, pp_advs.view, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id WHERE pp_advs.locale_brand='${type}' ORDER BY RAND() LIMIT ${start},${length};`;
+        const sqlQuery = `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id WHERE pp_advs.locale_brand='${type}' ORDER BY RAND() LIMIT ${start},${length};`;
 
         const advs = await query(sqlQuery);
 
