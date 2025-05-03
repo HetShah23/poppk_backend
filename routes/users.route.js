@@ -408,7 +408,9 @@ router.post(
     const start = page * sizePerPage - sizePerPage;
     const length = sizePerPage;
 
-    const sqlQuery = `SELECT * FROM pp_advs WHERE user_id=${req.user.id} ORDER BY ${sortBy} ${order} LIMIT ${start},${length};`;
+    const sqlQuery = req.user.type === 2 ?
+    `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id ORDER BY created_at LIMIT ${start},${length};` 
+    : `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id WHERE user_id=${req.user.id} ORDER BY created_at LIMIT ${start},${length};`;
 
     const advs = await query(sqlQuery);
 
