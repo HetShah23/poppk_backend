@@ -1,97 +1,87 @@
 const express = require("express");
 const router = express.Router();
-const crypto = require("crypto");
+
 const { check } = require("express-validator");
 const { asyncHandler } = require("../helper/common.helper");
-const { FRONTEND_URL } = require("../const");
-const axios = require("axios");
+const { randomUUID } = require("crypto");
+const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 
-const merchantId = process.env.LIVE === 1 ? process.env.MERCHANT_ID_LIVE : process.env.MERCHANT_ID_TEST
-const saltKey = process.env.LIVE === 1 ? process.env.SALT_KEY_LIVE : process.env.SALT_KEY_TEST
+const clientId = process.env.LIVE === 1 ? process.env.PHONEPE_CLIENT_ID : process.env.PHONEPE_CLIENT_ID_TEST;
+const clientSecret = process.env.LIVE === 1 ? process.env.PHONEPE_SECRET : process.env.PHONEPE_SECRET_TEST;
+const clientVersion = 1;
+const env = Env.SANDBOX;
+
+const client = StandardCheckoutClient.getInstance(clientId, clientSecret, clientVersion, env);
 
 router.post(
-    "/transction-founder",
-    [check("merchantOrderId").exists()],
+    "/init-payment",
+    [
+        check("amount").exists(),
+        check("user_id").exists(),
+    ],
     asyncHandler(async (req, res) => {
+        req.body.PostOfficeName = req.body.LocalityName;
+        delete req.body.LocalityName;
 
-        const { merchantOrderId, user_id, amount, phone } = req.body
+        const amount = Number(req.body.amount ?? 0) * 100; //converted to paisa
 
-        let data = {
-            merchantOrderId: merchantOrderId,
-            expireAfter: 1200,
-            amount: amount * 100, //rs to paisa
-            paymentFlow: {
-                type: "PG_CHECKOUT",
-                message: "Payment message used for collect requests",
-                merchantUrls: {
-                    redirectUrl: `${FRONTEND_URL}/payment-redirect/id=${merchantId}`
-                },
-                paymentModeConfig: {
-                    enabledPaymentModes: [
-                        {
-                            "type": "UPI_INTENT"
-                        },
-                        {
-                            "type": "UPI_COLLECT"
-                        },
-                        {
-                            "type": "UPI_QR"
-                        },
-                        {
-                            "type": "NET_BANKING"
-                        },
-                        {
-                            "type": "CARD",
-                            "cardTypes": [
-                                "DEBIT_CARD",
-                                "CREDIT_CARD"
-                            ]
-                        }
-                    ],
-                }
-            }
-        }
+        if(amount < 1) throw new errorResponse("Amount can not be less than 1");
 
-        const payload = JSON.stringify(data);
-        const payload_base64 = Buffer.from(payload).toString("base64");
-        const keyIndex = 1;
-        const packet = payload_base64 + "/pg/v1/pay" + saltKey;
-        const packet_sha265 = crypto.createHash('sha256').update(packet).digest('hex');
-        const checksum = packet_sha265 + '###' + keyIndex;
+        const merchantOrderId = randomUUID();
+        const redirectUrl = `https://www.poppk.in/redirect/successful_payment?merchantOrderId=${merchantOrderId}`;
 
-        const prod_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay"
-        const testing_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/pay"
-        const phonepe_url = process.env.LIVE === 1 ? prod_URL : testing_url;
-
-        const options = {
-            method: 'POST',
-            url: phonepe_url,
-            headers: {
-                accept: 'application/json',
-                'Content-Type': 'application/json',
-                'X-VERIFY': checksum
-            },
-            data: data
-        };
-
-        axios.request(options).then((response) => {
-            console.log(response.data)
-
-            return res.json(response.data)
+        const request = StandardCheckoutPayRequest.builder()
+            .merchantOrderId(merchantOrderId)
+            .amount(amount)
+            .redirectUrl(redirectUrl)
+            .build();
+  
+        client.pay(request).then((response)=> {
+            const checkoutPageUrl = response.redirectUrl;
+            res.status(200).json({
+                success: true,
+                message: "Checkout URL Generated",
+                data: { checkoutPageUrl, merchantOrderId },
+            });
+        }, (reject) => {
+            console.log(reject);
+            res.status(500).json({
+                success: false,
+                message: "Could not process payment",
+                data: {},
+            });
         })
-        .catch((error) => {
-            console.error(error);
-            res.status(403).json({ success: false, message: "failed", data: error });
-        });
-
-        
-        // res.status(200).json({
-        //     success: true,
-        //     message: "Inquiry uploaded successfully",
-        //     data: {},
-        // });
     })
 );
 
+router.post(
+    "/verify-payment",
+    [check("merchantOrderId").exists()],
+    asyncHandler(async (req, res) => {
+        client.getOrderStatus(req.body.merchantOrderId).then((response) => {
+            const state = response.state;
+            if(state === "COMPLETED") {
+                res.status(200).json({
+                    success: true,
+                    message: `Payment Success`,
+                    data: { state, oder_info: response },
+                });
+            } else {
+                res.status(400).json({
+                    success: false,
+                    message: `Payment ${state}`,
+                    data: { state, oder_info: response },
+                });
+            }
+        }, (reject) => {
+            console.log(reject);
+            res.status(500).json({
+                success: false,
+                message: "Could not process payment",
+                data: {},
+            });
+        });
+    })
+);
 
 module.exports = router;
