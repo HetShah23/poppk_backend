@@ -46,7 +46,7 @@ router.get("/", (req, res) => {
 });
 
 // Register New User
-// 	0 - free user, 1 - normal user, 2 - founder user, 3 - admin
+// 0 - free user, 1 - normal user, 2 - founder user, 3 - admin
 router.post(
   "/new-user",
   [
@@ -60,9 +60,7 @@ router.post(
     delete req.body.first_name;
     delete req.body.last_name;
 
-    const emailCheck = await query(
-      `SELECT * FROM pp_users_master WHERE email="${req.body.email}";`
-    );
+    const emailCheck = await query(`SELECT * FROM pp_users_master WHERE email="${req.body.email}";`);
     if (emailCheck.length > 0) {
       give_response(res, 410, false, "Email is already registered");
       throw new errorResponse("Email is already registered");
@@ -110,26 +108,38 @@ router.post(
         "your magic link has expired, generate new one"
       );
     } else {
-      if (req.body.password)
-        req.body.password = bcrypt.hashSync(req.body.password, 10);
+      if (req.body.password) req.body.password = bcrypt.hashSync(req.body.password, 10);
+      
       let status = 1;
-      let ref_code = "POP" + data[0];
-      await query(
-        `UPDATE pp_users_master SET status=?,password=?,ref_code=? WHERE id = ?`,
-        [status, req.body.password, ref_code, data[0]]
-      );
 
       let result = await query(
         `SELECT * FROM pp_users_master WHERE id=? LIMIT 1;`,
         [data[0]]
       );
+
+      const user_info = {
+        name: result[0].name,
+        id: result[0].id,
+        type: result[0].type,
+        email: result[0].email,
+      }
+
+      let ref_code = "POP" + data[0];
+
+      if(user_info.type === 2) {
+        await query(
+          `UPDATE pp_users_master SET password=?, ref_code=? WHERE id = ?`,
+          [req.body.password, ref_code, data[0]]
+        );
+      } else {
+        await query(
+          `UPDATE pp_users_master SET status=?,password=?, ref_code=? WHERE id = ?`,
+          [status, req.body.password, ref_code, data[0]]
+        );
+      }
+
       let token = jwt.sign(
-        {
-          name: result[0].name,
-          id: result[0].id,
-          type: result[0].type,
-          email: result[0].email,
-        },
+        user_info,
         process.env.JWTSECRET,
         { expiresIn: "24h" },
         { algorithm: "HS256" }
@@ -138,11 +148,28 @@ router.post(
       res.status(200).json({
         success: true,
         message: "New user registered. Verification email sent",
-        data: { token },
+        data: { token, user_info },
       });
     }
   })
 );
+
+const verification_pending = async (email, result, res) => {
+  const { html, token } = await setupEmailTemplateForVerification(
+    result[0].id,
+    1440
+  );
+  const email_status = await send_email(email, html);
+  if (email_status.failed) throw new errorResponse(response.err);
+
+  res.status(202).json({
+    success: false,
+    message: "Verification is pending email sent",
+    data: {
+      token,
+    },
+  });
+}
 
 router.post(
   "/user-login",
@@ -154,7 +181,7 @@ router.post(
     if (email.includes("@")) selecter_type = "email";
 
     let result = await query(
-      `SELECT * FROM pp_users_master WHERE ${selecter_type} = ? && type IN (0,1) LIMIT 1;`,
+      `SELECT * FROM pp_users_master WHERE ${selecter_type} = ? && type IN (0,1,2) LIMIT 1;`,
       [email]
     );
 
@@ -168,20 +195,9 @@ router.post(
       result[0].password === "" ||
       result[0].password === undefined
     ) {
-      const { html, token } = await setupEmailTemplateForVerification(
-        result[0].id,
-        1440
-      );
-      const email_status = await send_email(email, html);
-      if (email_status.failed) throw new errorResponse(response.err);
-
-      res.status(202).json({
-        success: false,
-        message: "Verification is pending email sent",
-        data: {
-          token,
-        },
-      });
+      await verification_pending(email, result, res);
+    } else if(result[0].status === 0 ) {
+      await verification_pending(email, result, res);
     } else {
       let result2 = await bcrypt.compare(password, result[0].password);
       if (!result2) throw new errorResponse("Unauthorized Login!!!");
@@ -313,6 +329,22 @@ router.post(
   })
 );
 
+router.post(
+  "/get-inquiries",
+  asyncHandler(async (req, res) => {
+    const { page, sizePerPage, sortBy, order, type } = req.body;
+    const start = page * sizePerPage - sizePerPage;
+    const length = sizePerPage;
+  
+    const inquiries_fetched = await query(`SELECT * FROM pp_inquiries ORDER BY created_at DESC;`);
+    res.status(200).json({
+      success: true,
+      message: "Inquiries fetched successfully",
+      data: {inquiries_fetched},
+    });
+  })
+);
+
 router.get(
   "/stats",
   asyncHandler(async (req, res) => {
@@ -408,7 +440,7 @@ router.post(
     const start = page * sizePerPage - sizePerPage;
     const length = sizePerPage;
 
-    const sqlQuery = req.user.type === 2 ?
+    const sqlQuery = req.user.type === 3 ?
     `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id ORDER BY created_at LIMIT ${start},${length};` 
     : `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id WHERE user_id=${req.user.id} ORDER BY created_at LIMIT ${start},${length};`;
 
@@ -437,21 +469,33 @@ router.post(
 );
 
 router.post(
-  "/search-city",
+  "/search-location",
   asyncHandler(async (req, res) => {
-    const sqlQuery = `SELECT * FROM pp_locations WHERE City LIKE '%${req.body.searchparams}%' DESC LIMIT 1,10;`;
-    const advs = await query(sqlQuery);
+
+    const page = req.body.page ?? 1
+    const sizePerPage = req.body.sizePerPage ?? 5
+    const sortBy = req.body.sortBy ?? "location"
+    const order = req.body.order ?? "ASC"
+    const searchBy = req.body.searchBy ?? "location"
+    const searchparams = req.body.searchparams ?? ""
+
+    const start = page * sizePerPage - sizePerPage;
+    const length = sizePerPage;
+
+    
+    const sqlQuery = `SELECT * FROM pp_locations WHERE ${searchBy} LIKE '%${searchparams}%' ORDER BY ${sortBy} ${order} LIMIT ${start},${length};`;
+    const locations = await query(sqlQuery);
 
     res.status(200).json({
       success: true,
       message: "Cities Fetched successfully",
-      data: { advs },
+      data: { locations },
     });
   })
 );
 
 router.post(
-  "/add-new-city",
+  "/add-new-location",
   [
     check("LocalityName").exists(),
     check("Pincode").exists(),
@@ -461,14 +505,15 @@ router.post(
   ],
   asyncHandler(async (req, res) => {
     req.body.PostOfficeName = req.body.LocalityName;
+    req.body.location = `${req.body.PostOfficeName}, ${req.body.City}, ${req.body.District}, ${req.body.State}, ${req.body.Pincode}`;
     delete req.body.LocalityName;
 
-    await query(`INSERT INTO users SET ? `, req.body);
+    await query(`INSERT INTO pp_locations SET ? `, req.body);
 
     res.status(200).json({
       success: true,
       message: "New city added",
-      data: { advs },
+      data: {},
     });
   })
 );

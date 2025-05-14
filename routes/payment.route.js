@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
+const util = require("util");
 
-const { check, query } = require("express-validator");
+const { check } = require("express-validator");
 const { asyncHandler } = require("../helper/common.helper");
 const { randomUUID } = require("crypto");
 const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
@@ -13,9 +14,15 @@ const clientVersion = 1;
 const env = Env.SANDBOX;
 
 const client = StandardCheckoutClient.getInstance(clientId, clientSecret, clientVersion, env);
+const conn = require("../database/connection.db");
+const query = util.promisify(conn.query).bind(conn);
 
-const payemnt_entry_in_db = async (data) => await query(`INSERT INTO pp_payment_master SET ? `, data);
+const payemnt_entry_in_db = async (data) => {
+    const test = await query(`INSERT INTO pp_payment_master SET ? `, data);
+    console.log(test)
+}
 const update_payment_in_db = async (status, merchantOrderId) => await query(`UPDATE pp_payment_master SET status=? WHERE merchantOrderId=?`,[status, merchantOrderId]);
+const user_update_in_db = async (user_id, status=1) => await query(`UPDATE pp_users_master SET status=? WHERE id=?`,[status,user_id]);
 
 router.post(
     "/init-payment",
@@ -33,7 +40,7 @@ router.post(
         if(amount < 1) throw new errorResponse("Amount can not be less than 1");
 
         const merchantOrderId = randomUUID();
-        const redirectUrl = `${FRONTEND_URL}/redirect/successful_payment?merchantOrderId=${merchantOrderId}`;
+        const redirectUrl = `${FRONTEND_URL}/verify_payment?merchantOrderId=${merchantOrderId}`;
 
         const request = StandardCheckoutPayRequest.builder()
             .merchantOrderId(merchantOrderId)
@@ -76,20 +83,16 @@ router.post(
     asyncHandler(async (req, res) => {
         client.getOrderStatus(req.body.merchantOrderId).then(async(response) => {
             const state = response.state;
-            await update_payment_in_db(state, req.body.merchantOrderId)
-            if(state === "COMPLETED") {
-                res.status(200).json({
-                    success: true,
-                    message: `Payment Success`,
-                    data: { state, oder_info: response },
-                });
-            } else {
-                res.status(400).json({
-                    success: false,
-                    message: `Payment ${state}`,
-                    data: { state, oder_info: response },
-                });
-            }
+            await update_payment_in_db(state, req.body.merchantOrderId);
+            const payment_info = await query(`SELECT * FROM pp_payment_master WHERE merchantOrderId="${req.body.merchantOrderId}" LIMIT 1;`);
+            
+            if(payment_info.length > 0 && state === "COMPLETED") await user_update_in_db(payment_info[0].user_id);
+
+            res.status(state === "COMPLETED" ? 200 : 400).json({
+                success: true,
+                message: state,
+                data: { state, oder_info: response },
+            });
         }, (reject) => {
             console.log(reject);
             res.status(500).json({
