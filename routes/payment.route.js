@@ -8,8 +8,8 @@ const { randomUUID } = require("crypto");
 const { StandardCheckoutClient, Env, StandardCheckoutPayRequest } = require("pg-sdk-node");
 const { FRONTEND_URL } = require("../const");
 
-const clientId = process.env.LIVE === 1 ? process.env.PHONEPE_CLIENT_ID : process.env.PHONEPE_CLIENT_ID_TEST;
-const clientSecret = process.env.LIVE === 1 ? process.env.PHONEPE_SECRET : process.env.PHONEPE_SECRET_TEST;
+const clientId = Number(process.env.LIVE) === 1 ? process.env.PHONEPE_CLIENT_ID : process.env.PHONEPE_CLIENT_ID_TEST;
+const clientSecret = Number(process.env.LIVE) === 1 ? process.env.PHONEPE_SECRET : process.env.PHONEPE_SECRET_TEST;
 const clientVersion = 1;
 const env = Env.SANDBOX;
 
