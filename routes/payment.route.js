@@ -91,7 +91,7 @@ router.post(
             res.status(state === "COMPLETED" ? 200 : 400).json({
                 success: true,
                 message: state,
-                data: { state, oder_info: response },
+                data: { state, oder_info: response, reason: payment_info[0].reason },
             });
         }, (reject) => {
             console.log(reject);
@@ -100,6 +100,20 @@ router.post(
                 message: "Could not process payment",
                 data: {},
             });
+        });
+    })
+);
+
+router.post(
+    "/stats",
+    asyncHandler(async (req, res) => {
+        const stats = await query(
+            `SELECT count(*) as count, sum(amount) as total_amount FROM pp_payment_master WHERE reason IN (${req.body.reason ?? [1,2]});`
+        );
+        res.status(200).json({
+            success: true,
+            message: "Stats fetched",
+            data: stats[0],
         });
     })
 );
