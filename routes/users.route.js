@@ -366,7 +366,15 @@ router.post(
     const start = page * sizePerPage - sizePerPage;
     const length = sizePerPage;
 
-    const sqlQuery = `SELECT pp_advs.*, pp_locations.City, pp_locations.State FROM pp_advs JOIN pp_locations on pp_advs.location_id = pp_locations.id WHERE pp_advs.locale_brand='${type}' ORDER BY RAND() LIMIT ${start},${length};`;
+    const sqlQuery = `
+      SELECT pp_advs.*, pp_locations.City, pp_locations.State, pp_cities.name as City2, pp_locals.name as loc, adv_analytics.click, adv_analytics.view, adv_analytics.site_visit FROM pp_advs 
+      LEFT JOIN pp_locations on pp_advs.location_id = pp_locations.id 
+      LEFT JOIN pp_locals on pp_locals.id = pp_advs.location
+      LEFT JOIN adv_analytics on adv_analytics.adv_id = pp_advs._id
+      RIGHT JOIN pp_cities on pp_locals.city_id = pp_cities.id
+      WHERE pp_advs.locale_brand='${type}'
+      ORDER BY RAND() LIMIT ${start},${length};
+    `;
 
     const advs = await query(sqlQuery);
 
@@ -534,6 +542,28 @@ router.post(
       success: true,
       message: "Adv uploaded successfully",
       data: { advs },
+    });
+  })
+);
+
+router.post(
+  "/capture",
+  asyncHandler(async (req, res) => {
+    const { type, count, adv_id } = req.body;
+
+    const sqlQuery = `
+      UPDATE adv_analytics
+      SET ${type} = ${type} + ${count ?? 1}
+      WHERE adv_id  = ${adv_id};
+    `;
+
+    const capture_query = await query(sqlQuery);
+    console.log(capture_query);
+
+    res.status(200).json({
+      success: true,
+      message: "analytics captured successfully",
+      data: {},
     });
   })
 );
